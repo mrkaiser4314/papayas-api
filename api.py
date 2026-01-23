@@ -1,47 +1,39 @@
 """
-API para Papayas Tierlist - Con PostgreSQL
-Lee datos directamente de la base de datos PostgreSQL
+API para Papayas Tierlist - Versión Mínima que FUNCIONA
 """
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_cors import CORS
 import os
 import psycopg2
-from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
 
 def get_db_connection():
-    """Obtiene conexión a PostgreSQL"""
     database_url = os.getenv('DATABASE_URL')
     if not database_url:
-        print("❌ No se encontró DATABASE_URL")
         return None
-    
     try:
-        conn = psycopg2.connect(database_url)
-        return conn
-    except Exception as e:
-        print(f"❌ Error conectando a PostgreSQL: {e}")
+        return psycopg2.connect(database_url)
+    except:
         return None
 
 @app.route('/')
 def home():
     return jsonify({
         'status': 'online',
-        'message': 'Papayas Tierlist API with PostgreSQL',
+        'message': 'Papayas Tierlist API',
         'endpoints': {
-            '/api/rankings/<mode>': 'Get player rankings by mode',
-            '/api/player/<discord_id>': 'Get player info',
-            '/api/stats': 'Get general statistics',
+            '/api/rankings/<mode>': 'Get rankings',
+            '/api/player/<id>': 'Get player',
+            '/api/stats': 'Get stats',
             '/health': 'Health check'
         }
     })
 
 @app.route('/health')
 def health():
-    """Endpoint de salud"""
     conn = get_db_connection()
     if conn:
         try:
@@ -49,34 +41,16 @@ def health():
             cur.execute("SELECT COUNT(*) FROM resultados")
             count = cur.fetchone()[0]
             conn.close()
-            
-            return jsonify({
-                'status': 'ok',
-                'database': 'connected',
-                'total_tests': count
-            })
+            return jsonify({'status': 'ok', 'database': 'connected', 'total_tests': count})
         except:
-            conn.close()
-            return jsonify({
-                'status': 'error',
-                'database': 'error'
-            }), 500
-    else:
-        return jsonify({
-            'status': 'error',
-            'database': 'disconnected'
-        }), 500
+            if conn:
+                conn.close()
+            return jsonify({'status': 'error', 'database': 'error'}), 500
+    return jsonify({'status': 'error', 'database': 'disconnected'}), 500
 
 @app.route('/api/rankings/<mode>')
 def get_rankings(mode):
-    """Obtiene rankings por modalidad - Compatible con frontend"""
-    valid_modes = ['overall', 'Mace', 'Sword', 'UHC', 'Crystal', 'NethOP', 'SMP', 'Axe', 'Dpot']
-    
-    if mode not in valid_modes:
-        return jsonify({
-            'error': 'Invalid mode',
-            'valid_modes': valid_modes
-        }), 400
+    """Rankings - VERSIÓN SIMPLE QUE FUNCIONA"""
     
     conn = get_db_connection()
     if not conn:
@@ -89,8 +63,6 @@ def get_rankings(mode):
     
     try:
         cur = conn.cursor()
-        
-        # Obtener todos los jugadores con sus datos
         cur.execute("""
             SELECT discord_id, nick_mc, discord_name, 
                    tier_por_modalidad, puntos_por_modalidad, 
@@ -100,103 +72,58 @@ def get_rankings(mode):
         """)
         
         rows = cur.fetchall()
-        players_array = []
-        tiers_dict = {}
+        players_list = []
         
         for row in rows:
-            discord_id, nick_mc, discord_name, tier_por_modalidad, puntos_por_modalidad, puntos_totales, es_premium = row
+            did, nick, dname, tiers_json, puntos_json, ptotal, premium = row
             
-            # Determinar tier para el modo actual
-            tier_actual = None
-            if mode == 'overall':
-                # Tier general basado en puntos totales
-                if puntos_totales >= 90:
-                    tier_actual = 'HT1'
-                elif puntos_totales >= 80:
-                    tier_actual = 'LT1'
-                elif puntos_totales >= 70:
-                    tier_actual = 'HT2'
-                elif puntos_totales >= 60:
-                    tier_actual = 'LT2'
-                elif puntos_totales >= 50:
-                    tier_actual = 'HT3'
-                elif puntos_totales >= 40:
-                    tier_actual = 'LT3'
-                elif puntos_totales >= 30:
-                    tier_actual = 'HT4'
-                elif puntos_totales >= 20:
-                    tier_actual = 'LT4'
-                elif puntos_totales >= 10:
-                    tier_actual = 'HT5'
-                else:
-                    tier_actual = 'LT5'
-            else:
-                # Tier específico de modalidad
-                if tier_por_modalidad and mode in tier_por_modalidad:
-                    tier_actual = tier_por_modalidad[mode]
+            # Crear modalidades
+            mods = {}
+            if tiers_json:
+                for m, t in tiers_json.items():
+                    p = 0
+                    if puntos_json and m in puntos_json:
+                        p = puntos_json[m]
+                    mods[m] = {'tier': t, 'tier_display': t, 'puntos': p}
             
-            # Formatear modalidades para el frontend
-            modalidades = {}
-            if tier_por_modalidad:
-                for modo, tier in tier_por_modalidad.items():
-                    puntos = 0
-                    if puntos_por_modalidad and modo in puntos_por_modalidad:
-                        puntos = puntos_por_modalidad[modo]
-                    
-                    modalidades[modo] = {
-                        'tier': tier,
-                        'tier_display': tier,
-                        'puntos': puntos
-                    }
-            
-            # Crear objeto jugador
-            player_obj = {
-                'id': discord_id,
-                'name': nick_mc or discord_name,
-                'points': puntos_totales or 0,
-                'es_premium': 'si' if es_premium == 'si' else 'no',
-                'modalidades': modalidades,
-                'tier': tier_actual
-            }
-            
-            players_array.append(player_obj)
-            
-            # Agregar a tiers_dict
-            if tier_actual:
-                if tier_actual not in tiers_dict:
-                    tiers_dict[tier_actual] = []
-                tiers_dict[tier_actual].append(player_obj)
+            # Agregar jugador
+            players_list.append({
+                'id': did,
+                'name': nick or dname,
+                'points': ptotal or 0,
+                'es_premium': 'si' if premium == 'si' else 'no',
+                'modalidades': mods
+            })
         
+        conn.close()
+        
+        # CRÍTICO: Retornar con "players"
         return jsonify({
             'mode': mode,
-            'players': players_array,
-            'tiers': tiers_dict,
-            'total_players': len(players_array)
+            'players': players_list,
+            'total_players': len(players_list)
         })
         
     except Exception as e:
-        print(f"❌ Error obteniendo rankings: {e}")
+        if conn:
+            conn.close()
+        print(f"Error: {e}")
         return jsonify({
             'mode': mode,
             'players': [],
-            'tiers': {},
             'total_players': 0,
             'error': str(e)
         }), 500
-    finally:
-        conn.close()
 
 @app.route('/api/player/<discord_id>')
 def get_player(discord_id):
-    """Obtiene información detallada de un jugador"""
+    """Player info"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'error': 'Database connection failed'}), 500
+        return jsonify({'error': 'Database error'}), 500
     
     try:
         cur = conn.cursor()
-        
-        # Obtener datos del jugador
         cur.execute("""
             SELECT discord_id, nick_mc, discord_name, 
                    tier_por_modalidad, puntos_por_modalidad, 
@@ -206,71 +133,58 @@ def get_player(discord_id):
         """, (discord_id,))
         
         row = cur.fetchone()
-        
         if not row:
+            conn.close()
             return jsonify({'error': 'Player not found'}), 404
         
-        discord_id, nick_mc, discord_name, tier_por_modalidad, puntos_por_modalidad, puntos_totales, es_premium = row
+        did, nick, dname, tiers_json, puntos_json, ptotal, premium = row
         
         # Calcular posición
-        cur.execute("""
-            SELECT COUNT(*) + 1
-            FROM jugadores
-            WHERE puntos_totales > %s
-        """, (puntos_totales,))
-        position = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) + 1 FROM jugadores WHERE puntos_totales > %s", (ptotal,))
+        pos = cur.fetchone()[0]
         
-        # Formatear tiers
-        tiers = {}
-        if tier_por_modalidad:
-            for modo, tier in tier_por_modalidad.items():
-                puntos = 0
-                if puntos_por_modalidad and modo in puntos_por_modalidad:
-                    puntos = puntos_por_modalidad[modo]
-                
-                tiers[modo] = {
-                    'tier': tier,
-                    'tier_display': tier,
-                    'puntos': puntos
-                }
+        # Tiers
+        tiers_dict = {}
+        if tiers_json:
+            for m, t in tiers_json.items():
+                p = puntos_json.get(m, 0) if puntos_json else 0
+                tiers_dict[m] = {'tier': t, 'tier_display': t, 'puntos': p}
+        
+        conn.close()
         
         return jsonify({
-            'id': discord_id,
-            'name': nick_mc or discord_name,
-            'discord_name': discord_name,
-            'nick_mc': nick_mc,
-            'puntos_totales': puntos_totales or 0,
-            'es_premium': 'si' if es_premium == 'si' else 'no',
-            'tiers': tiers,
-            'position': position,
+            'id': did,
+            'name': nick or dname,
+            'discord_name': dname,
+            'nick_mc': nick,
+            'puntos_totales': ptotal or 0,
+            'es_premium': 'si' if premium == 'si' else 'no',
+            'tiers': tiers_dict,
+            'position': pos,
             'tested': True
         })
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        if conn:
+            conn.close()
         return jsonify({'error': str(e)}), 500
-    finally:
-        conn.close()
 
 @app.route('/api/stats')
 def get_stats():
-    """Obtiene estadísticas generales"""
+    """Stats"""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'error': 'Database connection failed'}), 500
+        return jsonify({'error': 'Database error'}), 500
     
     try:
         cur = conn.cursor()
         
-        # Total de jugadores
         cur.execute("SELECT COUNT(*) FROM jugadores")
         total_players = cur.fetchone()[0]
         
-        # Total de tests
         cur.execute("SELECT COUNT(*) FROM resultados")
         total_tests = cur.fetchone()[0]
         
-        # Top testers
         cur.execute("""
             SELECT tester_name, COUNT(*) as tests
             FROM resultados
@@ -279,12 +193,9 @@ def get_stats():
             LIMIT 5
         """)
         
-        top_testers = []
-        for row in cur.fetchall():
-            top_testers.append({
-                'name': row[0],
-                'tests': row[1]
-            })
+        top_testers = [{'name': r[0], 'tests': r[1]} for r in cur.fetchall()]
+        
+        conn.close()
         
         return jsonify({
             'total_players': total_players,
@@ -293,10 +204,9 @@ def get_stats():
         })
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        if conn:
+            conn.close()
         return jsonify({'error': str(e)}), 500
-    finally:
-        conn.close()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
