@@ -26,87 +26,6 @@ def get_db_connection():
         print(f"❌ Error conectando a PostgreSQL: {e}")
         return None
 
-def organize_by_tiers(mode='overall'):
-    """Obtiene jugadores organizados por tiers desde PostgreSQL"""
-    conn = get_db_connection()
-    if not conn:
-        return {'tiers': {}, 'all_players': []}
-    
-    try:
-        cur = conn.cursor()
-        
-        # Obtener todos los jugadores
-        cur.execute("""
-            SELECT discord_id, nick_mc, discord_name, 
-                   tier_por_modalidad, puntos_totales, es_premium
-            FROM jugadores
-            WHERE tier_por_modalidad IS NOT NULL
-        """)
-        
-        rows = cur.fetchall()
-        all_players = []
-        
-        for row in rows:
-            discord_id, nick_mc, discord_name, tier_por_modalidad, puntos_totales, es_premium = row
-            
-            # Determinar tier según modalidad
-            tier = None
-            if mode == 'overall':
-                # Tier general (basado en puntos totales)
-                if puntos_totales >= 90:
-                    tier = 'HT1'
-                elif puntos_totales >= 80:
-                    tier = 'LT1'
-                elif puntos_totales >= 70:
-                    tier = 'HT2'
-                elif puntos_totales >= 60:
-                    tier = 'LT2'
-                elif puntos_totales >= 50:
-                    tier = 'HT3'
-                elif puntos_totales >= 40:
-                    tier = 'LT3'
-                elif puntos_totales >= 30:
-                    tier = 'HT4'
-                elif puntos_totales >= 20:
-                    tier = 'LT4'
-                elif puntos_totales >= 10:
-                    tier = 'HT5'
-                else:
-                    tier = 'LT5'
-            else:
-                # Tier por modalidad específica
-                if tier_por_modalidad and mode in tier_por_modalidad:
-                    tier = tier_por_modalidad[mode]
-            
-            if tier:
-                all_players.append({
-                    'discord_id': discord_id,
-                    'nick_mc': nick_mc,
-                    'discord_name': discord_name,
-                    'tier': tier,
-                    'puntos_totales': puntos_totales,
-                    'es_premium': es_premium == 'si'
-                })
-        
-        # Organizar por tiers
-        tiers = {}
-        for player in all_players:
-            tier = player['tier']
-            if tier not in tiers:
-                tiers[tier] = []
-            tiers[tier].append(player)
-        
-        return {
-            'tiers': tiers,
-            'all_players': all_players
-        }
-        
-    except Exception as e:
-        print(f"❌ Error obteniendo jugadores: {e}")
-        return {'tiers': {}, 'all_players': []}
-    finally:
-        conn.close()
-
 @app.route('/')
 def home():
     return jsonify({
@@ -150,7 +69,7 @@ def health():
 
 @app.route('/api/rankings/<mode>')
 def get_rankings(mode):
-    """Obtiene rankings por modalidad"""
+    """Obtiene rankings por modalidad - Compatible con frontend"""
     valid_modes = ['overall', 'Mace', 'Sword', 'UHC', 'Crystal', 'NethOP', 'SMP', 'Axe', 'Dpot']
     
     if mode not in valid_modes:
@@ -159,23 +78,125 @@ def get_rankings(mode):
             'valid_modes': valid_modes
         }), 400
     
-    data = organize_by_tiers(mode)
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({
+            'mode': mode,
+            'players': [],
+            'tiers': {},
+            'total_players': 0
+        })
     
-    return jsonify({
-        'mode': mode,
-        'tiers': data['tiers'],
-        'total_players': len(data['all_players'])
-    })
+    try:
+        cur = conn.cursor()
+        
+        # Obtener todos los jugadores con sus datos
+        cur.execute("""
+            SELECT discord_id, nick_mc, discord_name, 
+                   tier_por_modalidad, puntos_por_modalidad, 
+                   puntos_totales, es_premium
+            FROM jugadores
+            ORDER BY puntos_totales DESC
+        """)
+        
+        rows = cur.fetchall()
+        players_array = []
+        tiers_dict = {}
+        
+        for row in rows:
+            discord_id, nick_mc, discord_name, tier_por_modalidad, puntos_por_modalidad, puntos_totales, es_premium = row
+            
+            # Determinar tier para el modo actual
+            tier_actual = None
+            if mode == 'overall':
+                # Tier general basado en puntos totales
+                if puntos_totales >= 90:
+                    tier_actual = 'HT1'
+                elif puntos_totales >= 80:
+                    tier_actual = 'LT1'
+                elif puntos_totales >= 70:
+                    tier_actual = 'HT2'
+                elif puntos_totales >= 60:
+                    tier_actual = 'LT2'
+                elif puntos_totales >= 50:
+                    tier_actual = 'HT3'
+                elif puntos_totales >= 40:
+                    tier_actual = 'LT3'
+                elif puntos_totales >= 30:
+                    tier_actual = 'HT4'
+                elif puntos_totales >= 20:
+                    tier_actual = 'LT4'
+                elif puntos_totales >= 10:
+                    tier_actual = 'HT5'
+                else:
+                    tier_actual = 'LT5'
+            else:
+                # Tier específico de modalidad
+                if tier_por_modalidad and mode in tier_por_modalidad:
+                    tier_actual = tier_por_modalidad[mode]
+            
+            # Formatear modalidades para el frontend
+            modalidades = {}
+            if tier_por_modalidad:
+                for modo, tier in tier_por_modalidad.items():
+                    puntos = 0
+                    if puntos_por_modalidad and modo in puntos_por_modalidad:
+                        puntos = puntos_por_modalidad[modo]
+                    
+                    modalidades[modo] = {
+                        'tier': tier,
+                        'tier_display': tier,
+                        'puntos': puntos
+                    }
+            
+            # Crear objeto jugador
+            player_obj = {
+                'id': discord_id,
+                'name': nick_mc or discord_name,
+                'points': puntos_totales or 0,
+                'es_premium': 'si' if es_premium == 'si' else 'no',
+                'modalidades': modalidades,
+                'tier': tier_actual
+            }
+            
+            players_array.append(player_obj)
+            
+            # Agregar a tiers_dict
+            if tier_actual:
+                if tier_actual not in tiers_dict:
+                    tiers_dict[tier_actual] = []
+                tiers_dict[tier_actual].append(player_obj)
+        
+        return jsonify({
+            'mode': mode,
+            'players': players_array,
+            'tiers': tiers_dict,
+            'total_players': len(players_array)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error obteniendo rankings: {e}")
+        return jsonify({
+            'mode': mode,
+            'players': [],
+            'tiers': {},
+            'total_players': 0,
+            'error': str(e)
+        }), 500
+    finally:
+        conn.close()
 
 @app.route('/api/player/<discord_id>')
 def get_player(discord_id):
-    """Obtiene información de un jugador"""
+    """Obtiene información detallada de un jugador"""
     conn = get_db_connection()
     if not conn:
         return jsonify({'error': 'Database connection failed'}), 500
     
     try:
         cur = conn.cursor()
+        
+        # Obtener datos del jugador
         cur.execute("""
             SELECT discord_id, nick_mc, discord_name, 
                    tier_por_modalidad, puntos_por_modalidad, 
@@ -189,14 +210,39 @@ def get_player(discord_id):
         if not row:
             return jsonify({'error': 'Player not found'}), 404
         
+        discord_id, nick_mc, discord_name, tier_por_modalidad, puntos_por_modalidad, puntos_totales, es_premium = row
+        
+        # Calcular posición
+        cur.execute("""
+            SELECT COUNT(*) + 1
+            FROM jugadores
+            WHERE puntos_totales > %s
+        """, (puntos_totales,))
+        position = cur.fetchone()[0]
+        
+        # Formatear tiers
+        tiers = {}
+        if tier_por_modalidad:
+            for modo, tier in tier_por_modalidad.items():
+                puntos = 0
+                if puntos_por_modalidad and modo in puntos_por_modalidad:
+                    puntos = puntos_por_modalidad[modo]
+                
+                tiers[modo] = {
+                    'tier': tier,
+                    'tier_display': tier,
+                    'puntos': puntos
+                }
+        
         return jsonify({
-            'discord_id': row[0],
-            'nick_mc': row[1],
-            'discord_name': row[2],
-            'tier_por_modalidad': row[3],
-            'puntos_por_modalidad': row[4],
-            'puntos_totales': row[5],
-            'es_premium': row[6] == 'si',
+            'id': discord_id,
+            'name': nick_mc or discord_name,
+            'discord_name': discord_name,
+            'nick_mc': nick_mc,
+            'puntos_totales': puntos_totales or 0,
+            'es_premium': 'si' if es_premium == 'si' else 'no',
+            'tiers': tiers,
+            'position': position,
             'tested': True
         })
         
